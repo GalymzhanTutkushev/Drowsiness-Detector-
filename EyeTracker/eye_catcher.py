@@ -7,7 +7,6 @@ from scipy.spatial.distance import euclidean
 #from timeit import default_timer as timer
 import cv2
 import dlib
-import matplotlib
 #import face_recognition
 
 
@@ -47,9 +46,14 @@ class EyeCatcher:
         self.identification_frame_num = 0
         self.identification_counter = 30
         self.feature_extraction_num = 0
-        self.feature_extraction_counter = 20
+        self.feature_extraction_counter = 100
+        self.feature_extraction_counter_open = 50
         self.feature_extraction_vec = [0] * 128
-        self.blink_thresh = 0.20
+        self.blink_thresh = 0.22
+        self.left_ear_open_db = 0
+        self.riht_ear_open_db = 0
+        self.left_ear_closed_db = 0
+        self.riht_ear_closed_db = 0
 
         # person_state = 0 - normal
         # person_state = 1 - no blink in the last 100 frames
@@ -67,7 +71,6 @@ class EyeCatcher:
         self.unusual_state_counter = 0
         self.current_face = None
 
-
     def readDB(self):
         self.personNames = []
         self.personFeaturesVector = []
@@ -75,7 +78,7 @@ class EyeCatcher:
             reader = csv.reader(dbFile, delimiter='|')
             for row in reader:
                 self.personNames.append(row[0])
-                vals = row[1].split(',')
+                vals = row[5].split(',')
                 vals[0] = vals[0][1:]
                 vals[len(vals) - 1] = vals[len(vals) - 1][:-1]
                 feat_vec = []
@@ -87,13 +90,14 @@ class EyeCatcher:
     def appendDB(self, name):
         with open(self.dbName, 'a') as dbFile:
             writer = csv.writer(dbFile, delimiter='|')
-            db_row = [name, self.feature_extraction_vec]
+            db_row = [name, self.left_ear_open_db, self.riht_ear_open_db, 
+                            self.left_ear_closed_db, self.riht_ear_closed_db, self.feature_extraction_vec]
             writer.writerow(db_row)
         self.readDB()
 
     def createNewFeatures(self, name):
         frame = self.get_frame()
-        if self.feature_extraction_num < self.feature_extraction_counter:
+        if self.feature_extraction_num < self.feature_extraction_counter_open:
             faces = self.get_faces(frame)
             driver_face = None
             box_size = 0
@@ -107,6 +111,31 @@ class EyeCatcher:
                         box_size = cur_box_size
                         driver_face = face
                 self.analyze_face(frame, driver_face)
+                self.left_ear_open_db += self.left_EAR
+                self.riht_ear_open_db += self.riht_EAR
+                self.current_face = driver_face
+                pt1 = (self.current_face.left(), self.current_face.top())
+                pt2 = (self.current_face.right(), self.current_face.bottom())
+                cv2.rectangle(frame, pt1, pt2, (0, 255, 0), 2)
+                features = self.extractor.compute_face_descriptor(frame, self.landmarks)
+                for i in range(0, len(features)):
+                    self.feature_extraction_vec[i] += features[i]
+        elif self.feature_extraction_num < self.feature_extraction_counter:
+            faces = self.get_faces(frame)
+            driver_face = None
+            box_size = 0
+            if len(faces) != 0:
+                self.feature_extraction_num += 1
+                for face in faces:
+                    pt1 = (face.left(), face.top())
+                    pt2 = (face.right(), face.bottom())
+                    cur_box_size = euclidean(pt1, pt2)
+                    if cur_box_size > box_size:
+                        box_size = cur_box_size
+                        driver_face = face
+                self.analyze_face(frame, driver_face)
+                self.left_ear_closed_db += self.left_EAR
+                self.riht_ear_closed_db += self.riht_EAR
                 self.current_face = driver_face
                 pt1 = (self.current_face.left(), self.current_face.top())
                 pt2 = (self.current_face.right(), self.current_face.bottom())
@@ -116,10 +145,18 @@ class EyeCatcher:
                     self.feature_extraction_vec[i] += features[i]
         else:
             self.feature_extraction_num = 0
+            self.left_ear_open_db /= self.feature_extraction_counter_open
+            self.riht_ear_open_db /= self.feature_extraction_counter_open
+            self.left_ear_closed_db /= (self.feature_extraction_counter - self.feature_extraction_counter_open)
+            self.riht_ear_closed_db /= (self.feature_extraction_counter - self.feature_extraction_counter_open)
             self.person_state = 0
             for i in range(0, len(self.feature_extraction_vec)):
                 self.feature_extraction_vec[i] /= self.feature_extraction_counter
             self.appendDB(name)
+            self.left_ear_open_db = 0
+            self.riht_ear_open_db = 0
+            self.left_ear_closed_db = 0
+            self.riht_ear_closed_db = 0
         return frame
 
     def removeFromDB(self, index):
@@ -156,13 +193,13 @@ class EyeCatcher:
     def identification(self, frame):
         features = np.asarray(self.extractor.compute_face_descriptor(
             frame, self.landmarks), dtype=np.float32)
-        #name, perc = self.find_person_from_db(features)
+        # name, perc = self.find_person_from_db(features)
         return features
 
     def get_frame(self):
         frame = self.camera.read()
     #    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        return imutils.resize(frame, width=800)
+        return imutils.resize(frame, width=1024)
 
     def get_faces(self, frame):
         return self.detector(frame, 0)
@@ -175,8 +212,8 @@ class EyeCatcher:
         s = x2 - x1
         y = int((y1 + y2 - 0.4 * s) / 2)
         eye_frame = frame[y:y + int(0.4 * s), x:x + s]
-        #gaussian_eye = cv2.GaussianBlur(eye_frame, (9, 9), 10.0)
-        #eye_frame = cv2.addWeighted(eye_frame, 1.5, gaussian_eye, -0.5, 0, eye_frame)
+        # gaussian_eye = cv2.GaussianBlur(eye_frame, (9, 9), 10.0)
+        # eye_frame = cv2.addWeighted(eye_frame, 1.5, gaussian_eye, -0.5, 0, eye_frame)
         return eye_frame
 
     def draw_face(self, frame):
@@ -186,8 +223,8 @@ class EyeCatcher:
             # pt_text = (self.current_face.left() + 20,
             #           self.current_face.bottom() + 20)
             cv2.rectangle(frame, pt1, pt2, (0, 255, 0), 2)
-            #font = cv2.FONT_HERSHEY_DUPLEX
-            #cv2.putText(frame, self.current_person_name, pt_text, font, 0.6, (255, 255, 255), 1)
+            # font = cv2.FONT_HERSHEY_DUPLEX
+            # cv2.putText(frame, self.current_person_name, pt_text, font, 0.6, (255, 255, 255), 1)
 
     def analyze_face(self, frame, face):
         self.landmarks = self.predictor(frame, face)
@@ -219,13 +256,13 @@ class EyeCatcher:
         else:
             self.blinkless_frame_counter = 0
 
-     #   self.left_eye_frame = cv2.resize(self.crop_eye(frame, left_eye), (self.eye_size, self.eye_size))
-     #   self.riht_eye_frame = cv2.resize(self.crop_eye(frame, riht_eye), (self.eye_size, self.eye_size))
+    # self.left_eye_frame = cv2.resize(self.crop_eye(frame, left_eye), (self.eye_size, self.eye_size))
+    # self.riht_eye_frame = cv2.resize(self.crop_eye(frame, riht_eye), (self.eye_size, self.eye_size))
 
-        #angle = 180 * np.arctan2(np.abs(vert_top[0]-vert_bot[0]),np.abs(vert_top[1]-vert_bot[1])) / np.pi
+        # angle = 180 * np.arctan2(np.abs(vert_top[0]-vert_bot[0]),np.abs(vert_top[1]-vert_bot[1])) / np.pi
         # return name, perc
 
-    def analyze_frame(self, reset):
+    def analyze_frame(self, reset, auto_id):
         frame = self.get_frame()
         faces = self.get_faces(frame)
         driver_face = None
@@ -262,7 +299,10 @@ class EyeCatcher:
                 self.person_state = 128
 
         if reset:
-            self.person_state = 16
+            if auto_id:
+                self.person_state = 16
+            else:
+                self.person_state = 0
             self.left_EAR_AVG = 0.25
             self.riht_EAR_AVG = 0.25
             self.unusual_state_counter = 0
