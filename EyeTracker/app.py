@@ -7,6 +7,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secretkey'
 socketio = SocketIO(app, async_mode='threading')
 
+auto_id = False
 reset_btn_pressed = False
 names = []
 name_list_changed = True
@@ -19,12 +20,18 @@ addDB_Name = ""
 def main():
     return render_template('main.html')
 
+@socketio.on('auto_id_check')
+def auto_id_check(isChecked):
+    global auto_id
+    if isChecked == 1:
+        auto_id = True
+    else:
+        auto_id = False
 
 @socketio.on('reset_pressed')
 def reset_pressed():
     global reset_btn_pressed
     reset_btn_pressed = True
-
 
 @socketio.on('database_display')
 def database_display():
@@ -61,13 +68,15 @@ def gen(tracker):
                 socketio.emit('display_event', names)
                 tracker.person_state = 16
         else:
-            frame = tracker.analyze_frame(reset_btn_pressed)
+            frame = tracker.analyze_frame(reset_btn_pressed, auto_id)
             reset_btn_pressed = False
         
         socketio.emit('my_event', {'message': tracker.person_state,
                                     'name': tracker.current_person_name,
                                     'idframe': tracker.identification_frame_num,
-                                    'exframe': tracker.feature_extraction_num})
+                                    'exframe': tracker.feature_extraction_num,
+                                    'opencnt': tracker.feature_extraction_counter_open,
+                                    'maxcnt': tracker.feature_extraction_counter})
         ret, frame = cv2.imencode('.jpg', frame)
         frame = frame.tobytes()
         yield (b'--frame\r\n'
